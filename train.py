@@ -29,6 +29,13 @@ except ImportError:
     TENSORBOARD_FOUND = False
 
 try:
+    import wandb
+    WANDB_FOUND = True
+except ImportError:
+    wandb = None
+    WANDB_FOUND = False
+
+try:
     from fused_ssim import fused_ssim
     FUSED_SSIM_AVAILABLE = True
 except:
@@ -46,7 +53,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
         sys.exit(f"Trying to use sparse adam but it is not installed, please install the correct rasterizer using pip install [3dgs_accel].")
 
     first_iter = 0
-    tb_writer = prepare_output_and_logger(dataset)
+    tb_writer = prepare_output_and_logger(dataset, opt, pipe)
     gaussians = GaussianModel(dataset.sh_degree, opt.optimizer_type)
     scene = Scene(dataset, gaussians)
     gaussians.training_setup(opt)
@@ -189,7 +196,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                 print("\n[ITER {}] Saving Checkpoint".format(iteration))
                 torch.save((gaussians.capture(), iteration), scene.model_path + "/chkpnt" + str(iteration) + ".pth")
 
-def prepare_output_and_logger(args):    
+def prepare_output_and_logger(args, opt=None, pipe=None):    
     if not args.model_path:
         if os.getenv('OAR_JOB_ID'):
             unique_str=os.getenv('OAR_JOB_ID')
@@ -209,6 +216,21 @@ def prepare_output_and_logger(args):
         tb_writer = SummaryWriter(args.model_path)
     else:
         print("Tensorboard not available: not logging progress")
+    if getattr(args, "wandb", False):
+        if not WANDB_FOUND:
+            print("Weights & Biases not available: pip install wandb to enable --wandb")
+        else:
+            wandb_config = {}
+            for group in (args, opt, pipe):
+                if group is not None:
+                    wandb_config.update(vars(group))
+            wandb.init(
+                project=args.wandb_project,
+                name=args.wandb_name or os.path.basename(os.path.abspath(args.model_path)),
+                dir=args.model_path,
+                config=wandb_config,
+                sync_tensorboard=True,
+            )
     return tb_writer
 
 def training_report(tb_writer, iteration, Ll1, loss, l1_loss, elapsed, testing_iterations, scene : Scene, renderFunc, renderArgs, train_test_exp):
@@ -216,6 +238,12 @@ def training_report(tb_writer, iteration, Ll1, loss, l1_loss, elapsed, testing_i
         tb_writer.add_scalar('train_loss_patches/l1_loss', Ll1.item(), iteration)
         tb_writer.add_scalar('train_loss_patches/total_loss', loss.item(), iteration)
         tb_writer.add_scalar('iter_time', elapsed, iteration)
+    if WANDB_FOUND and wandb.run is not None:
+        wandb.log({
+            "train/l1_loss": Ll1.item(),
+            "train/total_loss": loss.item(),
+            "train/iter_time_ms": elapsed,
+        }, step=iteration)
 
     # Report test and samples of training set
     if iteration in testing_iterations:
@@ -245,10 +273,17 @@ def training_report(tb_writer, iteration, Ll1, loss, l1_loss, elapsed, testing_i
                 if tb_writer:
                     tb_writer.add_scalar(config['name'] + '/loss_viewpoint - l1_loss', l1_test, iteration)
                     tb_writer.add_scalar(config['name'] + '/loss_viewpoint - psnr', psnr_test, iteration)
+                if WANDB_FOUND and wandb.run is not None:
+                    wandb.log({
+                        f"{config['name']}/l1_loss": float(l1_test),
+                        f"{config['name']}/psnr": float(psnr_test),
+                    }, step=iteration)
 
         if tb_writer:
             tb_writer.add_histogram("scene/opacity_histogram", scene.gaussians.get_opacity, iteration)
             tb_writer.add_scalar('total_points', scene.gaussians.get_xyz.shape[0], iteration)
+        if WANDB_FOUND and wandb.run is not None:
+            wandb.log({"scene/total_points": scene.gaussians.get_xyz.shape[0]}, step=iteration)
         torch.cuda.empty_cache()
 
 if __name__ == "__main__":
@@ -267,6 +302,9 @@ if __name__ == "__main__":
     parser.add_argument('--disable_viewer', action='store_true', default=False)
     parser.add_argument("--checkpoint_iterations", nargs="+", type=int, default=[])
     parser.add_argument("--start_checkpoint", type=str, default = None)
+    parser.add_argument("--wandb", action="store_true", default=False)
+    parser.add_argument("--wandb_project", type=str, default="3dgs-garden")
+    parser.add_argument("--wandb_name", type=str, default=None)
     args = parser.parse_args(sys.argv[1:])
     args.save_iterations.append(args.iterations)
     
@@ -279,7 +317,11 @@ if __name__ == "__main__":
     if not args.disable_viewer:
         network_gui.init(args.ip, args.port)
     torch.autograd.set_detect_anomaly(args.detect_anomaly)
-    training(lp.extract(args), op.extract(args), pp.extract(args), args.test_iterations, args.save_iterations, args.checkpoint_iterations, args.start_checkpoint, args.debug_from)
+    dataset = lp.extract(args)
+    dataset.wandb = args.wandb
+    dataset.wandb_project = args.wandb_project
+    dataset.wandb_name = args.wandb_name
+    training(dataset, op.extract(args), pp.extract(args), args.test_iterations, args.save_iterations, args.checkpoint_iterations, args.start_checkpoint, args.debug_from)
 
     # All done
     print("\nTraining complete.")
