@@ -1,14 +1,12 @@
 # Garden 3DGS Reconstruction, Object Insertion, Rendering
 
-本 README 记录本项目的完整实验流程：使用 `uv` 创建环境，下载 Mip-NeRF 360 的 `garden` 场景，训练 3DGS 背景模型，加载已有模型进行测试，把三个物体放到 garden 桌面上，并渲染生成多视角漫游视频。
 
-所有命令默认在仓库根目录执行：
 
 ```bash
-cd 3DGS
+git clone https://github.com/groolegend/3D_garden_reconstruction.git
+cd 3D_garden_reconstruction
 ```
 
-注意：数据集、物体资产、训练输出权重和生成视频体积较大，不提交到 GitHub。本仓库通过 `.gitignore` 忽略 `data/`、`3D_data/` 和 `output/`。本 README 假设这些文件由用户自行下载、准备或生成。训练好的权重也可以从本文提供的 Google Drive 链接下载。
 
 目录结构：
 
@@ -67,15 +65,6 @@ data/mipnerf360/garden/sparse/0
 ```
 
 本实验使用 `images_4` 作为训练图像目录，以降低显存和训练时间。
-
-如果不使用脚本，也可以手动下载并解压，使目录满足：
-
-```text
-data/mipnerf360/garden/images_4
-data/mipnerf360/garden/sparse/0
-```
-
-也就是说，GitHub 仓库本身不包含 Mip-NeRF 360 数据。复现实验前，需要用户自行把 `garden` 数据放到 `data/mipnerf360/garden/` 下。
 
 ## 3. 训练 Garden 背景模型
 
@@ -147,7 +136,7 @@ train PSNR = 31.55
 
 ### 4.1 下载已有权重
 
-如果不想重新训练，可以下载已经训练好的 3DGS 权重。
+可以下载已经训练好的 3DGS 权重。
 
 纯 garden 背景权重：
 
@@ -389,67 +378,9 @@ ffmpeg -y \
   output/mipnerf360/garden_on_table/garden_with_objects_walkthrough.mp4
 ```
 
-## 9. 常见问题
 
-### 9.1 为什么训练时 train loss 会突然变大？
 
-这是 3DGS 的正常现象。默认：
-
-```text
-opacity_reset_interval = 3000
-```
-
-每隔 3000 次迭代会重置 Gaussian opacity，短时间改变可见性和 alpha blending，因此 loss 会出现尖峰。只要尖峰后迅速下降，并且整体趋势下降，就不是训练失败。
-
-### 9.2 为什么插入物体没有真实阴影？
-
-当前流程是直接把物体转成 Gaussian 并拼到背景 Gaussian 中，使用 3DGS renderer 统一渲染。该方式不会重新计算真实全局光照，也不会让新物体自动向桌面投射物理阴影。
-
-如果需要更真实的接触阴影，可以考虑：
-
-- 在物体底部添加半透明暗色 Gaussian 作为近似阴影
-- 把背景和物体导入 Blender，用物理光照重新渲染
-
-### 9.3 物体嵌入桌面或悬浮怎么办？
-
-脚本会用 RANSAC 从 garden 点云估计桌面平面，并把物体底部放到桌面上方。如果仍有嵌入或悬浮，可以调节：
-
-```python
-place_upright_on_plane(..., clearance=0.10)
-```
-
-或修改 `placements` 中物体的桌面像素位置和尺寸：
-
-```python
-placements = [
-    ("objB/model.obj", 220000, (360.0, 365.0), 0.44, 0.0022, None),
-    ("objC/model.obj", 120000, (505.0, 395.0), 0.46, 0.0060, None),
-]
-```
-
-每一项含义为：
-
-```text
-模型路径、采样点数、桌面像素位置、目标尺寸、Gaussian 半径、颜色覆盖
-```
-
-### 9.4 磁盘空间不够怎么办？
-
-可以删除不需要的中间渲染结果，例如旧版本输出目录：
-
-```bash
-rm -rf output/mipnerf360/garden_on_table_old
-```
-
-谨慎删除原始训练模型：
-
-```text
-output/mipnerf360/garden_wandb_v2
-```
-
-该目录包含训练好的 garden 背景模型，后续插入物体和渲染都需要它。
-
-## 10. 完整复现实验命令
+## 9. 完整复现实验命令
 
 从零开始的最小流程：
 
